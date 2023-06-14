@@ -1,9 +1,11 @@
 import java.io.BufferedReader;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -55,54 +57,46 @@ public class Server {
 			{
 				Socket controlConnection = controlSocket.accept();
 				
-				// We create a Buffered Reader to avoid costly read operations every time
 				controlReader = new BufferedReader(new InputStreamReader(controlConnection.getInputStream()));
  
-				// We want to enable automatic flushing so each line gets sent over the socket when it's written
 				controlWriter = new PrintWriter(controlConnection.getOutputStream(), true);
  
 				sendControlMessage("220 Service ready for new user");
 				
 				while(isRunning) 
 				{
-					if(controlConnection.isClosed())
-					{
-						controlConnection = controlSocket.accept();
+					try {
+						String[] input = controlReader.readLine().split(" ");
 						
-						// We create a Buffered Reader to avoid costly read operations every time
-						controlReader = new BufferedReader(new InputStreamReader(controlConnection.getInputStream()));
-		 
-						// We want to enable automatic flushing so each line gets sent over the socket when it's written
-						controlWriter = new PrintWriter(controlConnection.getOutputStream(), true);
-					}
-					//Read input coming from client and getting the command that we use for the switch case
-					String[] input = controlReader.readLine().split(" ");
-					
-					System.out.println(input[0]);
-					switch (input[0]) {
-					case "PORT": {
-						String message = port(input[1]);
-						controlWriter.println(message);
-
-					}
-					case "LIST": {
-						if(dataConnection.isClosed())
-						{
-							controlWriter.println("503 Bad sequence of commands");
-						}else {
-							list();
-							closeDataConnection();
+						System.out.println(input[0]);
+						switch (input[0]) {
+						case "PORT": {
+							String message = port(input[1]);
+							controlWriter.println(message);
 						}
-					}
-					default:
-						
+						case "LIST": {
+							if(dataConnection.isClosed())
+							{
+								controlWriter.println("503 Bad sequence of commands");
+							}else {
+								list();
+								closeDataConnection();
+							}
+						}
+						default:
+							
+						}
+					} catch (SocketException | EOFException e) {
+						System.out.println("Client disconnected unexpectedly.");
+						controlConnection.close();
+						controlConnection = controlSocket.accept();
+						controlReader = new BufferedReader(new InputStreamReader(controlConnection.getInputStream()));
+						controlWriter = new PrintWriter(controlConnection.getOutputStream(), true);
+						sendControlMessage("220 Service ready for new user");
 					}
 				}
 			}
-		}
- 
-		catch(IOException e)
-		{
+		} catch(IOException e) {
 			System.out.println("Could not accept a new connection");
 		}
  
@@ -124,10 +118,8 @@ public class Server {
 	
 	private void list()
 	{
-		//Obtain list of files from desired directory
 		File directory = new File(serverDirectory.toString());
 		File[] files = directory.listFiles();
-		//Send the list of files to the client
 		for(File file : files) {
 			if(file.isFile())
 			{
@@ -139,7 +131,6 @@ public class Server {
 	
 	private String port(String hostPort)
 	{
-	
 		String[] structure = hostPort.split(",");
 		
 		String ip = structure[0]+"."+structure[1]+"."+structure[2]+"."+structure[3];
@@ -149,7 +140,6 @@ public class Server {
 			createDataConnection(ip, port);
 			return "200 Command okay";
 		} catch (IOException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 			return "500 Couldn't open connection";
 		}
@@ -167,7 +157,6 @@ public class Server {
 			dataConnection.close();
 			dataWriter.close();
 		} catch (IOException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 	}
