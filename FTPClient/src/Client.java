@@ -6,86 +6,59 @@ import java.util.Scanner;
 
 public class Client {
 
-    // Define the server's IP
     private static final String ipServer = "localhost";
-
-    // Define the path to the client's directory
-    Path clientDirectory = Paths.get(".\\client_directory");
-
-    // Define the control and data sockets
-    public Socket controlSocket;
-    public ServerSocket dataSocket;
-
-    // Define the control and data input/output streams
-    public BufferedReader commandClientReader;
-    public PrintWriter commandClientWriter;
-    public BufferedReader dataClientReader;
-
-    // Client constructor
-    public Client() throws IOException {
-        // Create a new control socket to the server
-        controlSocket = new Socket(ipServer, 21);
-
-        // Define the control input/output streams
-        commandClientReader = new BufferedReader(new InputStreamReader(controlSocket.getInputStream()));
-        commandClientWriter = new PrintWriter(controlSocket.getOutputStream(), true);
-    }
+    private Path clientDirectory = Paths.get(".\\client_directory");
+    private Socket controlSocket;
+    private ServerSocket dataSocket;
+    private BufferedReader commandClientReader;
+    private PrintWriter commandClientWriter;
+    private BufferedReader dataClientReader;
 
     public static void main(String[] args) throws IOException {
         try {
-            // Create a new client
             Client client = new Client();
-
-            // Initialize input string
-            String clientInput = "";
-
-            // Print server's initial message
-            System.out.println(client.commandClientReader.readLine());
-
-            // Define a new scanner for user input
-            Scanner sc = new Scanner(System.in);
-
-            while (true) {  // Loop indefinitely, you should add a mechanism to break the loop
-                // Print menu
-                client.bringMenu();
-
-                // Get user input
-                clientInput = sc.nextLine();
-
-                // Switch on user input
-                switch (clientInput) {
-                    case "1":  //QUIT
-                    	break;
-                    case "2":	// List files
-                    	
-                        client.listCommand();
-                        
-                        break;
-                    case "3":
-
-                        break;
-
-                    case "4": // Retrieve file from the server
-                    	System.out.println("Introduce the name of the file you want to download: ");
-                    	clientInput = sc.nextLine();
-                    	client.retrieveCommand(clientInput);
-                    	System.out.println("retrieveCommand funciona");
-                    	
-                        break;
-
-                    default:
-                        System.out.println("\r\nInvalid option.");
-                        continue;
-                }
-            }
+            client.start();
         } catch (IOException e) {
             System.err.println("Can't connect.");
             System.exit(-1);
         }
     }
 
-    // Print menu to console
-    private void bringMenu() {
+    public void start() throws IOException {
+        controlSocket = new Socket(ipServer, 21);
+        commandClientReader = new BufferedReader(new InputStreamReader(controlSocket.getInputStream()));
+        commandClientWriter = new PrintWriter(controlSocket.getOutputStream(), true);
+
+        System.out.println(commandClientReader.readLine());
+
+        Scanner scanner = new Scanner(System.in);
+
+        while (true) {
+            printMenu();
+            String clientInput = scanner.nextLine();
+
+            switch (clientInput) {
+                case "1":
+                    controlClientConnection();
+                    scanner.close();
+                    return;
+                case "2":
+                    listFiles();
+                    break;
+                case "3":
+                    uploadFile();
+                    break;
+                case "4":
+                    downloadFile();
+                    break;
+                default:
+                    System.out.println("\r\nInvalid option.");
+                    break;
+            }
+        }
+    }
+
+    private void printMenu() {
         System.out.println("\r\nInput one of these numbers depending on what you want to do:");
         System.out.println("Options:");
         System.out.println("1. Close the client connection.");
@@ -94,29 +67,160 @@ public class Client {
         System.out.println("4. Download a file");
     }
 
-    // Format a PORT command message
-    public String makePort(int portNumber) {
-        String ip = "127,0,0,1";
-        int p1 = portNumber/256;
-        int p2 = portNumber%256;
-        String ipFix = ip + "," + p1 + "," + p2;
-        return ipFix;
+    private void controlClientConnection() throws IOException {
+        commandClientWriter.println("QUIT");
+        controlSocket.close();
+        System.out.println("Client connection closed.");
     }
 
-    // Create a new data connection to the server
-    public Socket createDataConnection() {
-    	try {
-    		//Create client data socket
-			dataSocket = new ServerSocket(0);
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-        // Send a PORT command to the server
+    private void listFiles() throws IOException {
+        Socket listSocket = createDataConnection();
+
+        if (readServerResponse().equals("200")) {
+            sendListCommand("");
+            if (readServerResponse().equals("150")) {
+                dataClientReader = new BufferedReader(new InputStreamReader(listSocket.getInputStream()));
+                String listOutput = dataClientReader.readLine();
+                while (listOutput != null) {
+                    System.out.println(listOutput);
+                    listOutput = dataClientReader.readLine();
+                }
+                if (!readServerResponse().equals("226")) {
+                    System.out.println("An error occurred during the connection.");
+                }
+            } else {
+                System.out.println("Could not open the server directory.");
+            }
+        }
+        dataSocket.close();
+        listSocket.close();
+    }
+
+    private void sendListCommand(String pathname) {
+        if (pathname.equals("")) {
+            commandClientWriter.println("LIST");
+        } else {
+            commandClientWriter.println("LIST " + pathname);
+        }
+    }
+
+    private void uploadFile() throws IOException {
+        System.out.println("Enter the path of the file you want to upload: ");
+        Scanner scanner = new Scanner(System.in);
+        String filePath = scanner.nextLine();
+
+        File file = new File(filePath);
+        if (file.exists() && file.isFile()) {
+            String fileName = file.getName();
+
+            Socket uploadSocket = createDataConnection();
+
+            if (readServerResponse().equals("200")) {
+                sendUploadCommand(fileName);
+                if (readServerResponse().equals("150")) {
+                    BufferedOutputStream fileOutputWriter = new BufferedOutputStream(uploadSocket.getOutputStream());
+                    FileInputStream fileInput = new FileInputStream(file);
+
+                    byte[] buffer = new byte[1024];
+                    int bytesRead;
+                    while ((bytesRead = fileInput.read(buffer)) != -1) {
+                        fileOutputWriter.write(buffer, 0, bytesRead);
+                    }
+
+                    fileOutputWriter.flush();
+                    fileInput.close();
+                    fileOutputWriter.close();
+
+                    if (readServerResponse().equals("226")) {
+                        System.out.println("File uploaded successfully.");
+                    } else {
+                        System.out.println("Connection failed during file upload.");
+                    }
+                } else {
+                    System.out.println("Server error: File upload not allowed.");
+                }
+            }
+            uploadSocket.close();
+            dataSocket.close();
+        } else {
+            System.out.println("File not found or is not a valid file.");
+        }
+    }
+
+    private void sendUploadCommand(String fileName) {
+        commandClientWriter.println("STOR " + fileName);
+    }
+
+    private void downloadFile() throws IOException {
+        System.out.println("Enter the name of the file you want to download: ");
+        Scanner scanner = new Scanner(System.in);
+        String fileName = scanner.nextLine();
+
+        Socket downloadSocket = createDataConnection();
+
+        if (readServerResponse().equals("200")) {
+            sendDownloadCommand(fileName);
+            if (readServerResponse().equals("150")) {
+                BufferedInputStream fileInputReader = new BufferedInputStream(downloadSocket.getInputStream());
+
+                File file = new File(clientDirectory.toString() + "\\" + fileName);
+
+                if (file.createNewFile()) {
+                    FileOutputStream fileOut = new FileOutputStream(file);
+
+                    int count;
+                    byte[] buffer = new byte[1024];
+                    while ((count = fileInputReader.read(buffer)) > 0) {
+                        fileOut.write(buffer, 0, count);
+                    }
+
+                    fileOut.close();
+                    System.out.println("File downloaded successfully.");
+                } else {
+                    System.out.println("File already exists.");
+                }
+
+                if (!readServerResponse().equals("226")) {
+                    System.out.println("Connection failed.");
+                }
+            } else {
+                System.out.println("File doesn't exist.");
+            }
+        }
+
+        while (commandClientReader.ready()) {
+            commandClientReader.readLine();
+        }
+
+        downloadSocket.close();
+        dataSocket.close();
+    }
+
+    private void sendDownloadCommand(String fileName) {
+        commandClientWriter.println("RETR " + fileName);
+    }
+
+    private String readServerResponse() {
+        String[] command = null;
+        try {
+            command = commandClientReader.readLine().split(" ");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return command[0];
+    }
+
+    private Socket createDataConnection() {
+        try {
+            dataSocket = new ServerSocket(0);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
         commandClientWriter.println("PORT " + makePort(dataSocket.getLocalPort()));
+
         Socket socket = null;
         try {
-            // Accept incoming data connection from the server
             socket = dataSocket.accept();
         } catch (IOException e) {
             e.printStackTrace();
@@ -124,106 +228,12 @@ public class Client {
 
         return socket;
     }
-    
-    public void sendListCommand(String pathname)
-    {
-    	if(pathname.equals(""))
-    	{
-    		commandClientWriter.println("LIST");
-    	}else {
-    		commandClientWriter.println("LIST " + pathname);
-    	}
-    }
-    
-    public void listCommand() throws IOException {
-    	Socket listSocket = createDataConnection();
-        
-        if(readServerResponse().equals("200"))
-        {
-            sendListCommand("");
-            if(readServerResponse().equals("150"))
-            {
-            	dataClientReader = new BufferedReader(new InputStreamReader(listSocket.getInputStream()));
-                String listOutput = dataClientReader.readLine();
-                while(listOutput != null) {
-                    System.out.println(listOutput);
-                    listOutput = dataClientReader.readLine();
-                }
-                               
-                if(!readServerResponse().equals("226"))
-                {            
-                	System.out.println("An error ocurred during connection");
-                }
-            } else {
-            	System.out.println("Could not open server directory");
-            }
-        }
-        dataSocket.close();
-        listSocket.close();
-    }
-    
-    public void sendRetrieveCommand(String fileName)
-    {
-    		commandClientWriter.println("RETR " + fileName);
-    }
-    
-    public void retrieveCommand(String fileName) throws IOException {
-    	Socket retrieveSocket = createDataConnection();
-    	
-    	System.out.println("data connection creada ");
-    	if(readServerResponse().equals("200"))
-        {
-    		sendRetrieveCommand(fileName);
-    		if(readServerResponse().equals("150"))
-            {
-    			System.out.println("Empezar descarga ");
-    			BufferedInputStream fileInputReader = new BufferedInputStream(retrieveSocket.getInputStream());
-    			File file = new File(clientDirectory.toString() + "\\" + fileName);
-    			
-    			if(file.createNewFile())
-    			{
-    				System.out.println("crear archivo ");
-    				FileOutputStream fileOut = new FileOutputStream(file);
-        			
-        			int count;
-        			byte[] buffer = new byte[1024];
-        			while((count = fileInputReader.read(buffer))>0)
-        			{
-        				fileOut.write(buffer, 0, count);
-        			}
-        			if(readServerResponse().equals("226"))
-                    {
-        				fileOut.close();
-                    } else {
-                    	System.out.println("Connection failed");
-                    }
-    			} else
-    			{
-    				System.out.println("File already exists");
-    			}
-    			
-            } else {
-            	System.out.println("File doesn't exist");
-            }
-        }
-    	while(commandClientReader.ready())
-		{
-    		commandClientReader.readLine();
-		}
-    	retrieveSocket.close();
-    	dataSocket.close();
-    }
-    
-    public String readServerResponse()
-    {
-    	String command[] = null;
-		try {
-			command = commandClientReader.readLine().split(" ");
-			System.out.println(command[0]);
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-    	return command[0];
+
+    private String makePort(int portNumber) {
+        String ip = "127,0,0,1";
+        int p1 = portNumber / 256;
+        int p2 = portNumber % 256;
+        String ipFix = ip + "," + p1 + "," + p2;
+        return ipFix;
     }
 }
